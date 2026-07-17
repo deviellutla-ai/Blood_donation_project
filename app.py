@@ -10,7 +10,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "blood_donation.db")
 
 app = Flask(__name__)
-app.secret_key = "dev-secret-key-change-in-production"
+app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
 BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
 
@@ -93,6 +93,51 @@ def init_db():
     if first_time:
         seed(db)
     db.close()
+
+
+def seed(db):
+    demo_users = [
+        ("Ramesh Kumar", "ramesh@example.com", "9876543210", "O+", "Hyderabad", "1995-04-12", "donor", 1, 3),
+        ("Priya Sharma", "priya@example.com", "9123456780", "A+", "Secunderabad", "1998-09-02", "donor", 1, 5),
+        ("Sumanth Reddy", "sumanth@example.com", "9988776655", "B+", "Hyderabad", "1993-01-20", "donor", 1, 1),
+        ("Anil Varma", "anil@example.com", "9012345678", "AB+", "Kukatpally", "1990-11-30", "donor", 1, 7),
+        ("Devi Nair", "devi@example.com", "9090909090", "O+", "Hyderabad", "1996-06-15", "donor", 1, 3),
+        ("Admin User", "admin@blooddonation.org", "9000000000", "O+", "Hyderabad", "1988-01-01", "admin", 1, 0),
+    ]
+    pw = generate_password_hash("password123")
+    for name, email, phone, bg, addr, dob, role, avail, donations in demo_users:
+        next_elig = (datetime.utcnow() + timedelta(days=90)).strftime("%Y-%m-%d")
+        db.execute(
+            """INSERT INTO users (full_name, email, phone, password_hash, blood_group,
+                address, dob, role, availability, total_donations, next_eligible_date)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (name, email, phone, pw, bg, addr, dob, role, avail, donations, next_elig),
+        )
+    db.commit()
+
+    donor_ids = [r[0] for r in db.execute("SELECT id FROM users WHERE role='donor'").fetchall()]
+    sample_history = [
+        (donor_ids[0], "2024-01-10", "Red Cross", "O+", 1, "Completed"),
+        (donor_ids[0], "2023-06-15", "City Hospital", "O+", 1, "Completed"),
+        (donor_ids[0], "2022-11-20", "Apollo Hospital", "O+", 1, "Completed"),
+    ]
+    db.executemany(
+        """INSERT INTO donation_history (donor_id, donation_date, hospital, blood_group, units, status)
+           VALUES (?,?,?,?,?,?)""",
+        sample_history,
+    )
+
+    sample_requests = [
+        ("Ravi Kumar", "O+", "Apollo Hospital", 2, "9876500000", "Urgent", "Pending", donor_ids[0]),
+        ("Lakshmi Devi", "A+", "City Hospital", 1, "9876511111", "Normal", "Approved", None),
+    ]
+    db.executemany(
+        """INSERT INTO blood_requests (patient_name, blood_group, hospital_name, units_required,
+            contact_number, emergency_level, status, requester_id)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        sample_requests,
+    )
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +396,7 @@ def history():
         (user["id"],),
     ).fetchall()
     return render_template("history.html", records=records)
-  
+
 
 # ---------------------------------------------------------------------------
 # Admin pages
@@ -407,9 +452,10 @@ def admin_update_request(request_id, new_status):
     return redirect(url_for("admin_dashboard"))
 
 
-import os
+# Run init_db() at import time too, so it also works under gunicorn
+# (gunicorn imports this module directly and never hits the __main__ block).
+init_db()
 
 if __name__ == "__main__":
-    init_db()
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
